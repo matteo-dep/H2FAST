@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+plotly
+xlsxwriter
+matplotlib
+openpyxl
+requests
+geopy
+folium
+streamlit-folium
