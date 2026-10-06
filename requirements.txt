@@ -1,0 +1,11 @@
+streamlit>=1.50
+numpy>=1.26
+pandas>=2.1
+numba>=0.60
+plotly>=5.20
+xlsxwriter>=3.1
+openpyxl>=3.1
+requests>=2.31
+folium>=0.15
+streamlit-folium>=0.20
+st-gsheets-connection>=0.1.0
