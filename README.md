@@ -88,13 +88,21 @@ Il file Excel di output si genera solo su richiesta, perché con molte configura
 
 **Aggiunte**
 - **LCOH attualizzato**: (investimento netto IVA + costi operativi attualizzati) / produzione attualizzata, al tasso del VAN. Gli indicatori originali restano (costo medio operativo, full cost).
-- Criteri di ottimizzazione aggiuntivi: LCOH, payback, investimento.
+- **Classifica su più criteri** (da 2 a 4, con pesi). Si tengono le configurazioni non dominate (frontiera di Pareto) e, tra queste, si mettono prima quelle più vicine al punto ideale. Resta disponibile il criterio singolo dell'originale. Ogni criterio è spiegato nell'interfaccia: cosa misura e che impianto tende a scegliere.
+- **Vincoli di progetto**: produzione minima di idrogeno (kg/anno) e quota minima della produzione rinnovabile destinata all'elettrolizzatore.
+- **Vendita dell'eccedenza in rete** attivabile: se spenta, l'impianto è dedicato all'idrogeno e l'energia non usata non produce ricavi.
+- **Stazione di rifornimento** opzionale.
+- **Stoccaggio espresso in giorni di produzione** (l'originale usava una quota della produzione annua).
+- Criteri aggiuntivi: LCOH, payback, investimento, quota di rinnovabile all'idrogeno.
 - Fonte eolica e fonte extra con i rispettivi costi.
+- TIR calcolato con lo stesso metodo delle secanti dell'originale, compilato con Numba: risultati identici, 10 volte più veloce. Nei casi senza soluzione l'originale faceva 1.000 iterazioni per configurazione.
 
 **Valori predefiniti diversi dalla classe originale**
-- Prezzo dell'energia immessa: **0,10 €/kWh** (nell'originale 1 €/kWh, un valore segnaposto).
-- Costo dello stoccaggio: **1.200 €/kg** (nell'originale 0, cioè stoccaggio gratuito).
-- Tutti gli altri valori sono quelli dell'originale: contributo pubblico 0%, debito 80% per 20 anni, stazione di rifornimento da 500.000 €, prezzo dell'idrogeno 10 €/kg.
+- Classifica: frontiera di Pareto su **LCOH + produzione di idrogeno** (nell'originale il criterio era scelto nell'Excel).
+- Vendita dell'eccedenza in rete **spenta**. Se attivata, il prezzo è 0,10 €/kWh (nell'originale 1 €/kWh, un valore segnaposto).
+- Stazione di rifornimento **esclusa**. Se inclusa, costa 500.000 € come nell'originale.
+- Stoccaggio: **3 giorni di produzione** a **1.200 €/kg**. L'originale usava il 10% della produzione annua (36,5 giorni) con costo 0. Con 36,5 giorni a 1.200 €/kg lo stoccaggio diventa la prima voce di costo e porta l'LCOH sopra i 30 €/kg.
+- Tutti gli altri valori sono quelli dell'originale: contributo pubblico 0%, debito 80% per 20 anni, prezzo dell'idrogeno 10 €/kg.
 
 ---
 

@@ -35,22 +35,25 @@ DEFAULT = {
     "batteria": "SI", "min_batt": 0.2, "max_batteria": 0.5, "eff_batt": 0.95, "min_elet": 0.2,
     "tassoDEN": 0.005, "bar": 300.0, "dP_el": 1.0, "dP_bat": 2.0,
     # --- investimenti
-    "Terr": 0.0, "OpeE": 0.0, "StazzRif": 500000.0, "SpeTOpere": 0.0, "BombSto": 0.0, "LavoImp": 0.0,
+    "Terr": 0.0, "OpeE": 0.0, "stazione": False, "StazzRif": 500000.0, "SpeTOpere": 0.0, "BombSto": 0.0, "LavoImp": 0.0,
     "CarrEll": 0.0, "ImpPV1eurokW": 800.0, "ImpWindeurokW": 1000.0, "ImpExtraeurokW": 2000.0,
     "EletteuroKW": 1650.0, "CompreuroKW": 4000.0, "AccuEeurokW": 200.0,
     "costounitariostoccaggio": 1200.0,   # originale 0: con 0 lo stoccaggio risultava gratuito
-    "idrogstocperc": 0.1,
+    "giorni_stoccaggio": 3.0,            # originale: 10% della produzione annua (= 36,5 giorni)
     # --- costi operativi
     "costlitroacqua": 0.035, "PercEserImp": 0.005, "Percentimpianti": 0.0025, "PercentOpeEd": 0.0005,
     "SpesAmmGen": 7000.0, "Affitto": 0.0, "CostiPersonal": 0.0, "AltriCost": 0.0, "IVAsualtriCost": "SI",
     # --- dati economico-finanziari
     "DurPianEcon": 20, "inflazione": 0.02, "inflazionePrezzoElet": 0.02, "tassoVAN": 0.1, "incentpubb": 0.0,
     "duratincentpubb": 0, "prezzoindrogeno": 10.0, "inflazioneIdrog": 0.01,
+    "vendita_rete": False,               # off-grid: l'energia non usata dall'elettrolizzatore non è venduta
     "prezzoElett": 0.10,                 # originale 1 €/kWh (valore segnaposto)
     "ContrPubb": 0.0, "DebitoSenior": 0.8, "DurDebitoSenior": 20, "tassoDebito": 0.05, "FreqPagamenti": 1,
     "DurataPonte": 0, "tassoPonte": 0.0, "aliquoMedia": 0.275, "MaxInterssDed": 0.3, "Perciva": 0.22,
     # --- opzioni di output
-    "attributo": "VAN", "n_progetti": 5, "lingua": "ITA", "relazione": "NO",
+    "modo_criteri": "multi", "criteri": ["LCOH", "ProdAnnuaIdrogkg"], "pesi": {"LCOH": 1.0, "ProdAnnuaIdrogkg": 1.0},
+    "vincolo_H2_min": 0.0, "vincolo_auto_min": 0.0,
+    "attributo": "LCOH", "n_progetti": 5, "lingua": "ITA", "relazione": "NO",
     "relazioni": [{"X": "PotEle", "Y": "VAN"}, {"X": "AccuE", "Y": "LCOH"}],
     "si_fa_simulazione": "NO", "attributo_simulazione": "prezzo", "si_fa_grafico_SA": "NO",
     "SA_variable_list": ["VAN", "LCOH"],
@@ -64,6 +67,50 @@ CRITERI = ["VAN", "TIR", "LCOH", "PAYBACK", "costo_full_cost", "costo_medio_oper
            "ProdAnnuaIdrogkg", "CapFac", "EnergiaAutocons", "ProdElettVend", "spegn_giorn", "PotEle", "AccuE",
            "potenza_compressore", "impianto_stocc", "costo_full_cost_levelized"]
 VARIABILI_GRAFICI = [c for c in M.VARIABILI.keys()]
+CRITERI_MULTI = ["LCOH", "ProdAnnuaIdrogkg", "VAN", "TIR", "PAYBACK", "Autoconsumo", "investimento", "CapFac",
+                 "ProdElettVend", "spegn_giorn", "costo_full_cost"]
+
+# Cosa comporta ogni criterio: cosa misura e che tipo di impianto tende a premiare
+DESCRIZIONI = {
+    "LCOH": ("Costo di produzione di 1 kg di idrogeno su tutta la vita dell'impianto: investimento più "
+             "costi di gestione, attualizzati. Non dipende dal prezzo di vendita.",
+             "Premia l'impianto che produce idrogeno al costo più basso. Di solito un elettrolizzatore di taglia "
+             "intermedia: abbastanza grande da usare bene l'energia rinnovabile, non così grande da restare "
+             "fermo per molte ore."),
+    "ProdAnnuaIdrogkg": ("Chilogrammi di idrogeno prodotti nel primo anno.",
+                         "Premia sempre l'elettrolizzatore più grande, qualunque sia il costo: va usato insieme "
+                         "a un criterio economico (es. LCOH) o come vincolo di produzione minima."),
+    "VAN": ("Valore attuale netto: somma attualizzata dei flussi di cassa (vendita di H2 ed eventuale vendita di "
+            "energia in rete, meno costi, rate e imposte).",
+            "Premia la redditività complessiva. Se la vendita in rete è attiva e remunerativa tende a scegliere "
+            "elettrolizzatori piccoli: l'impianto si ripaga con l'energia, non con l'idrogeno."),
+    "TIR": ("Tasso interno di rendimento dell'investimento.",
+            "Premia il rendimento per euro investito: favorisce impianti piccoli anche se producono poco H2."),
+    "PAYBACK": ("Anni necessari a recuperare l'investimento con i flussi di cassa.",
+                "Premia gli investimenti che rientrano prima, spesso i più piccoli."),
+    "Autoconsumo": ("Quota dell'energia rinnovabile prodotta che va all'elettrolizzatore.",
+                    "Misura quanto l'impianto è dedicato all'idrogeno invece che alla rete: premia elettrolizzatori "
+                    "grandi e batterie che recuperano l'eccedenza."),
+    "investimento": ("Investimento iniziale, netto IVA.",
+                     "Premia l'impianto più economico da realizzare, cioè il più piccolo."),
+    "CapFac": ("Capacity factor: ore di lavoro equivalenti dell'elettrolizzatore rispetto all'anno.",
+               "Premia elettrolizzatori piccoli che lavorano sempre al massimo (ammortizzati meglio, producono poco)."),
+    "ProdElettVend": ("Energia rinnovabile non usata dall'elettrolizzatore (immessa in rete o persa).",
+                      "Da minimizzare: premia gli impianti che sprecano meno energia."),
+    "spegn_giorn": ("Numero di spegnimenti dell'elettrolizzatore in un anno.",
+                    "Da minimizzare: meno cicli di accensione significano meno usura. Premia batterie grandi o "
+                    "elettrolizzatori piccoli."),
+    "costo_full_cost": ("Full cost medio dell'originale: costo operativo medio più investimento diviso per tutta "
+                        "la produzione, senza attualizzare.",
+                        "Simile all'LCOH ma non tiene conto del valore del denaro nel tempo."),
+    "costo_medio_operativo": ("Costo operativo medio per kg (senza investimento).",
+                              "Ignora l'investimento: premia impianti grandi con costi di gestione diluiti."),
+    "prezzoindrogeno": ("Per ogni configurazione si cerca il prezzo minimo di vendita che azzera il VAN.",
+                        "Indica la configurazione che può vendere l'idrogeno al prezzo più basso restando in "
+                        "pareggio. È il calcolo più lento."),
+    "costo_full_cost_levelized": ("Indicatore dell'originale (la formula somma due volte il full cost).",
+                                  "Tenuto solo per compatibilità: meglio usare l'LCOH."),
+}
 
 
 # =============================================================================================
@@ -214,7 +261,27 @@ def parametri_motore(par):
     p["variable_1_list"] = [r["X"] for r in par["relazioni"] if r.get("X") and r.get("Y")]
     p["variable_2_list"] = [r["Y"] for r in par["relazioni"] if r.get("X") and r.get("Y")]
     p["file_csv"], p["tipo_file"] = None, "NO"
+    # stoccaggio espresso in giorni di produzione -> quota della produzione annua (parametro originale)
+    p["idrogstocperc"] = par["giorni_stoccaggio"] / 365.0
+    if not par["stazione"]:
+        p["StazzRif"] = 0.0
+    if not par["vendita_rete"]:
+        p["prezzoElett"] = 0.0
+    criteri = [c for c in par["criteri"] if c in CRITERI_MULTI]
+    if par["modo_criteri"] == "multi" and len(criteri) >= 2:
+        p["criteri"] = criteri
+        p["pesi"] = [float(par["pesi"].get(c, 1.0)) for c in criteri]
+    else:
+        p["criteri"], p["pesi"] = [], []
+    for k in ("giorni_stoccaggio", "stazione", "vendita_rete", "modo_criteri"):
+        p.pop(k, None)
     return p
+
+
+def descrizione_criteri(par):
+    if par["modo_criteri"] == "multi" and len(par["criteri"]) >= 2:
+        return " + ".join(nome_var(c, False) for c in par["criteri"]) + " (Pareto)"
+    return nome_var(par["attributo"], False)
 
 
 def potenza_totale(par):
@@ -289,6 +356,12 @@ def sezione_import(s):
                         if nuovi.get("variable_1_list"):
                             nuovi["relazioni"] = [{"X": x, "Y": y} for x, y in
                                                   zip(nuovi["variable_1_list"], nuovi["variable_2_list"])]
+                        # traduzione dei parametri originali nelle opzioni di questa interfaccia
+                        if "idrogstocperc" in nuovi:
+                            nuovi["giorni_stoccaggio"] = float(nuovi.pop("idrogstocperc")) * 365
+                        nuovi["stazione"] = float(nuovi.get("StazzRif", 0) or 0) > 0
+                        nuovi["vendita_rete"] = float(nuovi.get("prezzoElett", 0) or 0) > 0
+                        nuovi["modo_criteri"] = "singolo"   # l'INPUT.xlsx prevede un solo criterio
                     ignorati = []
                     for k, v in nuovi.items():
                         if k in DEFAULT:
@@ -526,11 +599,18 @@ def tab_investimenti(s):
         st.markdown("**Stoccaggio idrogeno**")
         campo("costounitariostoccaggio", "Stoccaggio [€/kg di capacità]", passo=50.0,
               help="Nell'originale il default era 0 (stoccaggio gratuito): qui 1.200 €/kg.")
-        campo("idrogstocperc", "Capacità di stoccaggio [% della produzione annua]", perc=True, massimo=100,
-              passo=1.0)
+        campo("giorni_stoccaggio", "Autonomia dello stoccaggio [giorni di produzione]", minimo=0.0, massimo=365.0,
+              passo=0.5, fmt="%.1f",
+              help="Capacità = produzione annua × giorni / 365. L'originale usava il 10% della produzione "
+                   "annua (36,5 giorni): a 1.200 €/kg lo stoccaggio diventava la prima voce di costo.")
+        st.caption(f"= {s.par['giorni_stoccaggio'] / 365 * 100:.1f}% della produzione annua")
         campo("BombSto", "Bombole di stoccaggio [€]", passo=1000.0)
-        campo("StazzRif", "Stazione di rifornimento [€]", passo=10000.0,
-              help="Default originale 500.000 €: azzeralo se l'impianto non prevede la stazione.")
+        st.markdown("**Stazione di rifornimento**")
+        interruttore("stazione", "Includi la stazione di rifornimento",
+                     help="Erogatori e attrezzature per rifornire i veicoli. Non serve se l'idrogeno è usato in "
+                          "loco (industria, cogenerazione) o ritirato con carro bombolaio.")
+        if s.par["stazione"]:
+            campo("StazzRif", "Costo della stazione [€]", passo=10000.0, help="Default originale 500.000 €.")
     with c3:
         st.markdown("**Opere e altri costi**")
         campo("Terr", "Terreno [€]", passo=1000.0, help="0 se il terreno è di proprietà")
@@ -562,8 +642,14 @@ def tab_finanziari(s):
     with c1:
         st.markdown("**Ricavi e piano**")
         campo("prezzoindrogeno", "Prezzo di vendita dell'idrogeno [€/kg]", passo=0.5)
-        campo("prezzoElett", "Prezzo dell'energia immessa in rete [€/kWh]", passo=0.01, fmt="%.3f",
-              help="Nell'originale il default era 1 €/kWh (valore segnaposto).")
+        interruttore("vendita_rete", "L'energia non usata dall'elettrolizzatore è venduta in rete",
+                     help="Spento: impianto dedicato all'idrogeno (off-grid), l'eccedenza non produce ricavi. "
+                          "Acceso: l'eccedenza è venduta al prezzo indicato e i ricavi entrano nel VAN.")
+        if s.par["vendita_rete"]:
+            campo("prezzoElett", "Prezzo dell'energia immessa in rete [€/kWh]", passo=0.01, fmt="%.3f",
+                  help="Nell'originale il default era 1 €/kWh (valore segnaposto).")
+        else:
+            st.caption("Eccedenza non valorizzata: VAN e TIR dipendono solo dall'idrogeno.")
         campo("incentpubb", "Incentivo pubblico [€/kg di H2]", passo=0.5)
         campo("duratincentpubb", "Durata incentivo [anni]", massimo=50)
         campo("DurPianEcon", "Durata del piano economico [anni]", minimo=3, massimo=40)
@@ -571,7 +657,8 @@ def tab_finanziari(s):
     with c2:
         st.markdown("**Inflazione e imposte**")
         campo("inflazione", "Inflazione dei costi [%]", perc=True, minimo=-10, passo=0.5)
-        campo("inflazionePrezzoElet", "Inflazione prezzo energia [%]", perc=True, minimo=-10, passo=0.5)
+        campo("inflazionePrezzoElet", "Inflazione prezzo energia [%]", perc=True, minimo=-10, passo=0.5,
+              disabled=not s.par["vendita_rete"])
         campo("inflazioneIdrog", "Inflazione prezzo idrogeno [%]", perc=True, minimo=-10, passo=0.5)
         campo("aliquoMedia", "Aliquota media sugli utili [%]", perc=True, passo=0.5)
         campo("MaxInterssDed", "Interessi deducibili [% dell'EBITDA]", perc=True, passo=5.0)
@@ -591,15 +678,76 @@ def tab_finanziari(s):
         campo("tassoPonte", "Tasso prestito ponte [%]", perc=True, passo=0.25)
 
 
+def spiega_criterio(c):
+    misura, effetto = DESCRIZIONI.get(c, ("", ""))
+    verso = "più alto è meglio" if M.VARIABILI.get(c, ("", "", "", "max"))[3] == "max" else "più basso è meglio"
+    if c in ("costo_medio_operativo", "costo_full_cost", "costo_full_cost_levelized", "prezzoindrogeno",
+             "spegn_giorn", "PAYBACK", "LCOH", "investimento", "impianto_stocc"):
+        verso = "più basso è meglio"
+    st.markdown(f"**{nome_var(c, False)}** · *{verso}*  \n{misura}  \n➜ {effetto}")
+
+
+def sezione_criteri(s):
+    par = s.par
+    st.markdown("##### Come scegliere i migliori progetti")
+    scelta("modo_criteri", "Modalità", ["multi", "singolo"], orizzontale=True,
+           fmt=lambda x: {"multi": "Più criteri insieme (frontiera di Pareto)",
+                          "singolo": "Un solo criterio (come nell'originale)"}[x])
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        if par["modo_criteri"] == "multi":
+            k = _init("criteri", [c for c in par["criteri"] if c in CRITERI_MULTI])
+            par["criteri"] = st.multiselect("Criteri (da 2 a 4)", CRITERI_MULTI, key=k, format_func=nome_var,
+                                            max_selections=4)
+            if len(par["criteri"]) < 2:
+                st.warning("Scegli almeno due criteri, oppure passa a 'Un solo criterio'.")
+            else:
+                st.caption("Peso di ogni criterio nella scelta tra le configurazioni della frontiera "
+                           "(1 = uguale importanza).")
+                cols = st.columns(len(par["criteri"]))
+                for col, c in zip(cols, par["criteri"]):
+                    kp = _init("peso_" + c, float(par["pesi"].get(c, 1.0)))
+                    par["pesi"][c] = col.number_input(nome_var(c, False), key=kp, min_value=0.0, max_value=10.0,
+                                                      step=0.5, format="%.1f")
+        else:
+            scelta("attributo", "Criterio", CRITERI, fmt=nome_var)
+    with c2:
+        with st.container(border=True):
+            selezionati = par["criteri"] if par["modo_criteri"] == "multi" else [par["attributo"]]
+            for c in selezionati:
+                spiega_criterio(c)
+            if par["modo_criteri"] == "multi" and len(par["criteri"]) >= 2:
+                st.caption("Come si sceglie: si tengono le configurazioni *non dominate*, quelle per cui nessun'altra "
+                           "è migliore su tutti i criteri insieme (frontiera di Pareto). Tra queste vengono prima "
+                           "quelle più vicine al punto ideale, cioè al valore migliore di ciascun criterio, "
+                           "tenendo conto dei pesi.")
+    with st.expander("📖 Guida a tutti i criteri"):
+        st.dataframe(pd.DataFrame([{"Criterio": nome_var(c, False), "Cosa misura": DESCRIZIONI[c][0],
+                                    "Che impianto tende a scegliere": DESCRIZIONI[c][1]} for c in DESCRIZIONI]),
+                     hide_index=True, width="stretch")
+
+    st.markdown("##### Vincoli di progetto")
+    st.caption("Le configurazioni che non li rispettano restano visibili nell'esplorazione ma non entrano nella "
+               "classifica. 0 = nessun vincolo.")
+    c1, c2 = st.columns(2)
+    with c1:
+        campo("vincolo_H2_min", "Produzione minima di idrogeno [kg/anno]", passo=1000.0, fmt="%.0f",
+              help="Per esempio il fabbisogno annuo della flotta o dell'utenza da servire.")
+    with c2:
+        campo("vincolo_auto_min", "Quota minima della produzione rinnovabile destinata all'idrogeno [%]",
+              perc=True, massimo=100, passo=5.0, fmt="%.0f",
+              help="Esclude gli impianti che usano l'elettrolizzatore solo per una piccola parte dell'energia "
+                   "e vivono della vendita in rete.")
+
+
 def tab_output(s):
     par = s.par
     st.caption("Corrisponde alle opzioni in fondo all'INPUT.xlsx: criterio di ottimizzazione, grafici, simulazioni.")
+    sezione_criteri(s)
+    st.divider()
+    st.markdown("##### Altre opzioni")
     c1, c2, c3 = st.columns(3)
     with c1:
-        scelta("attributo", "Criterio con cui scegliere i migliori progetti", CRITERI, fmt=nome_var,
-               help="Come nell'originale: per costi, prezzo, payback e spegnimenti vince il valore più basso, "
-                    "per le altre grandezze il più alto. 'Prezzo idrogeno' calcola per ogni configurazione "
-                    "il prezzo minimo che azzera il VAN (più lento).")
         campo("n_progetti", "Quanti progetti mostrare", minimo=1, massimo=20)
         scelta("lingua", "Lingua del file Excel di output", ["ITA", "ENG"])
     with c2:
@@ -672,14 +820,26 @@ def controlli(par, profilo):
     if par["DurDebitoSenior"] >= par["DurPianEcon"]:
         avvisi.append("Il debito dura quanto o più del piano economico: le rate oltre l'ultimo anno del piano "
                       "non vengono considerate (l'originale in questo caso si bloccava).")
-    if par["StazzRif"] > 0:
-        avvisi.append(f"È inclusa una stazione di rifornimento da {eur(par['StazzRif'])} (default originale).")
+    multi = par["modo_criteri"] == "multi"
+    if multi and len(par["criteri"]) < 2:
+        errori.append("Per la classifica su più criteri servono almeno due criteri (scheda 'Opzioni di output').")
+    if par["stazione"]:
+        avvisi.append(f"È inclusa una stazione di rifornimento da {eur(par['StazzRif'])}.")
+    criteri = par["criteri"] if multi else [par["attributo"]]
+    if par["vendita_rete"] and any(c in ("VAN", "TIR", "PAYBACK") for c in criteri):
+        avvisi.append("La vendita dell'energia in rete è attiva e la classifica usa un criterio di redditività: "
+                      "possono vincere impianti con elettrolizzatori piccoli, che si ripagano vendendo energia. "
+                      "Per orientare la scelta sull'idrogeno usa l'LCOH o la produzione, oppure un vincolo minimo.")
+    if not multi and par["attributo"] in ("ProdAnnuaIdrogkg", "PotEle", "AccuE", "EnergiaAutocons"):
+        avvisi.append(f"Il criterio '{nome_var(par['attributo'], False)}' da solo sceglie semplicemente le taglie più "
+                      "grandi, senza guardare i costi.")
     if par["ContrPubb"] > 0 or par["incentpubb"] > 0:
         avvisi.append(f"Sono attivi contributi pubblici: {par['ContrPubb'] * 100:.0f}% sull'investimento, "
                       f"{par['incentpubb']:.2f} €/kg per {par['duratincentpubb']} anni.")
     if par["si_fa_grafico_SA"] == "SI" and par["batteria"] != "SI":
         avvisi.append("I grafici di sensitivity richiedono la batteria: verranno saltati.")
-    if par["attributo"] == "prezzoindrogeno" and (par["relazione"] == "SI" or par["si_fa_simulazione"] == "SI"):
+    if not multi and par["attributo"] == "prezzoindrogeno" and (par["relazione"] == "SI"
+                                                                or par["si_fa_simulazione"] == "SI"):
         avvisi.append("Con il criterio 'Prezzo idrogeno' l'originale non produce grafici di relazione né "
                       "simulazioni di equilibrio: verranno saltati.")
     return errori, avvisi
@@ -689,7 +849,7 @@ def step2(s):
     par = s.par
     n = M.conta_configurazioni(potenza_totale(par), par["dP_el"], par["batteria"], par["dP_bat"])
     per_conf = 0.00012 + 0.0006
-    if par["attributo"] == "prezzoindrogeno":
+    if par["modo_criteri"] != "multi" and par["attributo"] == "prezzoindrogeno":
         per_conf *= 10
     stima = n * per_conf + (2 if M.NUMBA_DISPONIBILE else 0)
     if not M.NUMBA_DISPONIBILE and par["batteria"] == "SI":
@@ -703,11 +863,19 @@ def step2(s):
     c4.metric("Tempo stimato", f"~{max(1, stima):.0f} s")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Batteria", SI_NO[par["batteria"]])
-    c2.metric("Criterio", nome_var(par["attributo"], False))
-    c3.metric("Prezzo H2", num(par["prezzoindrogeno"], 2, "€/kg"))
+    c2.metric("Stazione di rifornimento", "Sì" if par["stazione"] else "No")
+    c3.metric("Vendita eccedenza in rete", num(par["prezzoElett"], 3, "€/kWh") if par["vendita_rete"] else "No")
     c4.metric("Capitale proprio / debito / contributo",
               f"{(1 - par['ContrPubb'] - par['DebitoSenior']) * 100:.0f} / {par['DebitoSenior'] * 100:.0f} / "
               f"{par['ContrPubb'] * 100:.0f} %")
+    vincoli = []
+    if par["vincolo_H2_min"] > 0:
+        vincoli.append(f"almeno {num(par['vincolo_H2_min'], 0, 'kg/anno')} di H2")
+    if par["vincolo_auto_min"] > 0:
+        vincoli.append(f"almeno {par['vincolo_auto_min'] * 100:.0f}% della rinnovabile all'H2")
+    st.markdown(f"**Classifica:** {descrizione_criteri(par)} · **Vincoli:** "
+                f"{', '.join(vincoli) if vincoli else 'nessuno'} · **Prezzo H2:** "
+                f"{num(par['prezzoindrogeno'], 2, '€/kg')} · **Stoccaggio:** {num(par['giorni_stoccaggio'], 1)} giorni")
 
     with st.expander("Tutti i parametri che verranno usati"):
         righe = [{"Parametro": k, "Valore": str(v)} for k, v in parametri_motore(par).items()
@@ -799,14 +967,22 @@ def kpi(a, c):
     r2[3].metric("Capacity factor", num(a.CapFac, 1, "%"))
     r3 = st.columns(4)
     r3[0].metric("Investimento (netto IVA)", eur(a.investimento))
-    r3[1].metric("Compressore", num(a.potenza_compressore, 1, "kW"))
+    quota = a.EnergiaAutocons / c.analisi1.e_pv * 100 if c.analisi1.e_pv > 0 else 0
+    r3[1].metric("Rinnovabile destinata all'H2", num(quota, 1, "%"),
+                 help="Quota della produzione rinnovabile che va all'elettrolizzatore (il resto è immesso o perso)")
     r3[2].metric("Stoccaggio", num(a.idrogeno_stocc, 0, "kg"))
     r3[3].metric("Spegnimenti / anno", num(a.spegn_giorn, 0))
 
 
 def scheda_migliori(c):
-    st.markdown(f"Configurazioni esplorate: **{c.analisi1.qt_progetti}** · criterio: "
-                f"**{nome_var(c.attributo, False)}**")
+    if len(c.criteri) >= 2:
+        pesi = ", ".join(f"{nome_var(k, False)} {w:g}" for k, w in zip(c.criteri, c.pesi))
+        crit = f"frontiera di Pareto su {' + '.join(nome_var(k, False) for k in c.criteri)} (pesi: {pesi})"
+    else:
+        crit = nome_var(c.attributo, False)
+    n_ok = int(c.risultati["ammissibile"].sum()) if "ammissibile" in c.risultati else c.analisi1.qt_progetti
+    st.markdown(f"Configurazioni esplorate: **{c.analisi1.qt_progetti}** · che rispettano i vincoli: **{n_ok}** · "
+                f"classifica: **{crit}**")
     tab = c.TabellaMax.apply(pd.to_numeric, errors="coerce").astype(float)
     riga_tir = [i for i in tab.index if str(i).startswith(("TIR", "Project IRR"))]
     if riga_tir:
@@ -871,13 +1047,14 @@ def scheda_economia(a):
 def scheda_esplora(s, c):
     df = c.risultati.replace([np.inf, -np.inf], np.nan)
     disponibili = [v for v in M.VARIABILI if v in df.columns and df[v].notna().any() and df[v].nunique() > 1]
-    st.caption("Ogni punto è una configurazione elettrolizzatore/batteria. La frontiera di Pareto unisce le "
-               "configurazioni per cui non ne esiste un'altra migliore su entrambi gli assi. "
-               "Clicca un punto per esaminarlo in dettaglio.")
+    st.caption("Ogni punto è una configurazione elettrolizzatore/batteria; in grigio quelle che non rispettano i "
+               "vincoli. La frontiera di Pareto unisce le configurazioni per cui non ne esiste un'altra migliore su "
+               "entrambi gli assi. Clicca un punto per esaminarlo in dettaglio.")
+    def_x, def_y = (c.criteri[0], c.criteri[1]) if len(c.criteri) >= 2 else ("investimento", "VAN")
     c1, c2, c3 = st.columns(3)
-    x = c1.selectbox("Asse X", disponibili, index=disponibili.index("investimento") if "investimento" in disponibili
-                     else 0, format_func=nome_var, key="es_x")
-    y = c2.selectbox("Asse Y", disponibili, index=disponibili.index("VAN") if "VAN" in disponibili else 1,
+    x = c1.selectbox("Asse X", disponibili, index=disponibili.index(def_x) if def_x in disponibili else 0,
+                     format_func=nome_var, key="es_x")
+    y = c2.selectbox("Asse Y", disponibili, index=disponibili.index(def_y) if def_y in disponibili else 1,
                      format_func=nome_var, key="es_y")
     colore = c3.selectbox("Colore", disponibili, index=disponibili.index("PotEle") if "PotEle" in disponibili
                           else 0, format_func=nome_var, key="es_col")
@@ -886,10 +1063,11 @@ def scheda_esplora(s, c):
                      index=0 if M.VARIABILI[x][3] == "max" else 1, key=f"es_vx_{x}") == "alto"
     max_y = c2.radio(f"Per {nome_var(y, False)} è meglio", ["alto", "basso"], horizontal=True,
                      index=0 if M.VARIABILI[y][3] == "max" else 1, key=f"es_vy_{y}") == "alto"
-    pareto = G.fronte_pareto(df, x, y, max_x, max_y)
+    ok = df["ammissibile"] if "ammissibile" in df and df["ammissibile"].any() else pd.Series(True, index=df.index)
+    pareto = G.fronte_pareto(df[ok], x, y, max_x, max_y)
     c3.metric("Configurazioni sulla frontiera", len(pareto))
     fig = G.fig_esplora(df, x, y, colore, nome_var(x), nome_var(y), nome_var(colore), pareto, c.top_idx,
-                        s.config_sel)
+                        s.config_sel, ok_mask=ok)
     ev = st.plotly_chart(fig, width="stretch", on_select="rerun", selection_mode="points", key="es_graf")
     try:
         punti = ev.selection.points if ev else []
@@ -957,6 +1135,9 @@ def step3(s):
     if s.get("par_usati") != s.par:
         st.warning("Hai modificato i parametri dopo l'elaborazione: i risultati si riferiscono ai valori "
                    "precedenti. Torna allo step 2 per ricalcolare.")
+    if not getattr(c, "vincoli_rispettati", True):
+        st.warning("Nessuna configurazione rispetta i vincoli di progetto: la classifica le considera tutte. "
+                   "Allenta i vincoli o aumenta la potenza rinnovabile e il limite dell'elettrolizzatore.")
 
     c_sel, c_xl1, c_xl2, c_nav = st.columns([3, 1.2, 1.2, 1.2])
     with c_sel:

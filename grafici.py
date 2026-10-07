@@ -227,8 +227,15 @@ def fronte_pareto(df, x, y, max_x, max_y):
     return d.iloc[tenuti].sort_values(x)
 
 
-def fig_esplora(df, x, y, colore, nome_x, nome_y, nome_col, pareto=None, top_ids=None, sel_id=None):
+def fig_esplora(df, x, y, colore, nome_x, nome_y, nome_col, pareto=None, top_ids=None, sel_id=None, ok_mask=None):
     fig = go.Figure()
+    if ok_mask is not None and not ok_mask.all():
+        escluse = df[~ok_mask]
+        fig.add_scatter(x=escluse[x], y=escluse[y], mode="markers", name="Fuori dai vincoli",
+                        customdata=escluse["ID"], marker=dict(size=6, color="rgba(128,128,128,0.35)"),
+                        hovertemplate=f"{nome_x}: %{{x:,.2f}}<br>{nome_y}: %{{y:,.2f}}"
+                                      f"<extra>config %{{customdata}} · fuori dai vincoli</extra>")
+        df = df[ok_mask]
     fig.add_scatter(x=df[x], y=df[y], mode="markers", name="Configurazioni",
                       customdata=df["ID"],
                       marker=dict(size=8, color=df[colore], colorscale=SCALA_SEQ, showscale=True,

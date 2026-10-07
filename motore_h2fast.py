@@ -225,6 +225,38 @@ def esplora_batteria(E_PV, elc, batt, min_elet, min_batt_pct, max_batt_pct, eff_
     return out
 
 
+@njit(cache=True)
+def npv_nb(flussi, rate):
+    """Stessa formula di Analisi_finanziaria.npv: flussi / exp(t * log(1 + rate))."""
+    lr = np.log(1.0 + rate)
+    s = 0.0
+    for t in range(flussi.shape[0]):
+        s += flussi[t] / np.exp(t * lr)
+    return s
+
+
+@njit(cache=True)
+def irr_nb(flussi, guess, tol, max_iter):
+    """Stesso metodo delle secanti di Analisi_finanziaria.irr (stessi passi e criteri di arresto).
+
+    Restituisce (trovato, tasso). Serve a velocizzare i casi che non convergono e facevano 1000 iterazioni.
+    """
+    rate0 = guess
+    rate1 = rate0 + 0.05
+    npv0 = npv_nb(flussi, rate0)
+    npv1 = npv_nb(flussi, rate1)
+    for _ in range(max_iter):
+        if abs(npv1 - npv0) < tol:
+            return False, 0.0
+        rate2 = rate1 - npv1 * (rate1 - rate0) / (npv1 - npv0)
+        npv2 = npv_nb(flussi, rate2)
+        if abs(npv2) < tol:
+            return True, rate2
+        rate0, rate1 = rate1, rate2
+        npv0, npv1 = npv1, npv2
+    return False, 0.0
+
+
 def flussi_senza_batteria(E_PV, p_elc, min_elet):
     """Bilancio orario senza batteria (versione vettorizzata del ciclo originale run_analysis_nobattery)."""
     p_pv = E_PV
@@ -895,6 +927,14 @@ class Analisi_finanziaria:
                 return None
 
     def irr(self, guess=0.1, tol=1e-6, max_iter=1000):
+        # [Streamlit] stesso algoritmo compilato con Numba (vedi irr_nb); l'originale è in irr_python
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            trovato, tasso = irr_nb(np.asarray(self.FlussoNettoCassa, dtype=float), float(guess), float(tol),
+                                    int(max_iter))
+        return float(tasso) if trovato else None
+
+    def irr_python(self, guess=0.1, tol=1e-6, max_iter=1000):
         rate0 = guess
         rate1 = rate0 + 0.05
         npv0 = self.npv(rate0)
@@ -1300,12 +1340,19 @@ class Analisi_combinata:
             "attributo": "VAN", "n_progetti": 5, "lingua": "ITA", "relazione": "NO",
             "variable_1_list": [], "variable_2_list": [], "si_fa_simulazione": "NO",
             "attributo_simulazione": "prezzo", "si_fa_grafico_SA": "NO", "SA_variable_list": [],
+            # [Streamlit] classifica su più criteri (frontiera di Pareto) e vincoli di progetto
+            "criteri": [], "pesi": [], "vincolo_H2_min": 0.0, "vincolo_auto_min": 0.0,
         }
         for nome, valore in {**predefiniti, **parametri}.items():
             if valore == "YES":
                 valore = "SI"
             setattr(self, nome, valore)
         self.n_progetti = int(self.n_progetti)
+        self.criteri = [ALIAS_VARIABILI.get(c, c) for c in (self.criteri or []) if c not in CRITERI_PREZZO]
+        if len(self.criteri) >= 2:
+            self.attributo = self.criteri[0]   # per compatibilità con le parti che leggono un solo criterio
+        if not self.pesi or len(self.pesi) != len(self.criteri):
+            self.pesi = [1.0] * len(self.criteri)
 
     def traduci_attributo(self):
         self.attributo = ALIAS_VARIABILI.get(self.attributo, self.attributo)
@@ -1411,6 +1458,11 @@ class Analisi_combinata:
         for col in ("VAN", "TIR", "PAYBACK"):
             if col in self.risultati:
                 self.risultati[col] = pd.to_numeric(self.risultati[col], errors="coerce")
+        # [Streamlit] vincoli di progetto: produzione minima di H2 e quota minima di rinnovabile all'elettrolizzatore
+        if len(self.risultati):
+            self.risultati["ammissibile"] = ((self.risultati["ProdAnnuaIdrogkg"] >= float(self.vincolo_H2_min))
+                                             & (self.risultati["Autoconsumo"] >= float(self.vincolo_auto_min) * 100))
+        self.vincoli_rispettati = bool(len(self.risultati)) and bool(self.risultati["ammissibile"].any())
 
     def ordina_lista(self, attributo):
         """Ordina le configurazioni come nell'originale: il migliore è l'ULTIMO elemento."""
@@ -1424,10 +1476,71 @@ class Analisi_combinata:
         df = self.risultati.dropna(subset=[attributo1, attributo2])
         return df.sort_values(attributo1, ascending=attributo1 not in ORDINE_DECRESCENTE, kind="stable")
 
+    def _candidati(self):
+        """[Streamlit] Configurazioni che rispettano i vincoli; se nessuna li rispetta si usano tutte."""
+        df = self.risultati
+        if "ammissibile" in df and df["ammissibile"].any():
+            return df[df["ammissibile"]]
+        return df
+
+    def ordina_multicriterio(self, df, criteri, pesi):
+        """[Streamlit] Classifica su più criteri.
+
+        1. Ordinamento per fronti di Pareto: il fronte 1 contiene le configurazioni per cui nessun'altra è
+           migliore o uguale su tutti i criteri e strettamente migliore su almeno uno; il fronte 2 quelle non
+           dominate una volta tolto il fronte 1, e così via.
+        2. Dentro ogni fronte si mettono prima le configurazioni più vicine al punto ideale (il valore migliore
+           di ogni criterio), con i criteri normalizzati 0-1 e pesati.
+        Restituisce df ordinato dal migliore e le colonne 'fronte' e 'distanza_ideale'.
+        """
+        X = []
+        for c in criteri:
+            v = pd.to_numeric(df[c], errors="coerce").to_numpy(dtype=float)
+            if VARIABILI.get(c, ("", "", "", "max"))[3] == "max":
+                v = -v                                   # tutto diventa "da minimizzare"
+            finiti = np.isfinite(v)
+            peggiore = (np.max(v[finiti]) + 1 + abs(np.max(v[finiti])) * 0.01) if finiti.any() else 0.0
+            X.append(np.where(finiti, v, peggiore))      # valori mancanti (es. payback mai raggiunto) = peggiori
+        X = np.column_stack(X)
+        lo, hi = X.min(axis=0), X.max(axis=0)
+        Z = (X - lo) / np.where(hi - lo > 0, hi - lo, 1.0)
+        w = np.asarray(pesi, dtype=float)
+        w = w / w.sum() if w.sum() > 0 else np.full(len(criteri), 1 / len(criteri))
+        distanza = np.sqrt((Z ** 2 * w).sum(axis=1))
+
+        fronte = np.zeros(len(df), dtype=int)
+        rimasti = np.arange(len(df))
+        k = 0
+        while len(rimasti) and k < 50:
+            k += 1
+            sub = X[rimasti]
+            non_dom = [a for a in range(len(sub))
+                       if not (np.all(sub <= sub[a], axis=1) & np.any(sub < sub[a], axis=1)).any()]
+            fronte[rimasti[non_dom]] = k
+            rimasti = np.delete(rimasti, non_dom)
+            if (fronte > 0).sum() >= max(self.n_progetti, 1):
+                break                                    # bastano i fronti che servono per i top N
+        fronte[fronte == 0] = k + 1
+        out = df.copy()
+        out["fronte"] = fronte
+        out["distanza_ideale"] = distanza
+        return out.sort_values(["fronte", "distanza_ideale"], kind="stable")
+
     def tabella_topN_per(self, attributo1, n=10):
         attributo1 = ALIAS_VARIABILI.get(attributo1, attributo1)
-        ordinata = self.ordina_lista(attributo1)
-        top = ordinata.iloc[-n:].iloc[::-1]          # dal migliore (Progetto 1) in giù
+        candidati = self._candidati()
+        if len(self.criteri) >= 2:
+            ordinata = self.ordina_multicriterio(candidati, self.criteri, self.pesi)
+            top = ordinata.iloc[:n]
+            # frontiera (fronte 1) di tutte le configurazioni ammissibili, per i grafici
+            self.risultati["pareto_criteri"] = self.risultati["ID"].isin(ordinata.loc[ordinata["fronte"] == 1, "ID"])
+        else:
+            base, self.risultati = self.risultati, candidati
+            try:
+                ordinata = self.ordina_lista(attributo1)
+            finally:
+                self.risultati = base
+            top = ordinata.iloc[-n:].iloc[::-1]          # dal migliore (Progetto 1) in giù
         self.top_righe = top.reset_index(drop=True)
         self.top_idx = top["ID"].astype(int).tolist()
         self._aggiorna(0.92, "Business plan dei migliori progetti" if self.lingua == "ITA" else "Top projects")
